@@ -52,7 +52,7 @@ python hybrid_video.py --video_path <path_to_video> \
 
 ### Varying the denoising strength
 
-The hybrid video script uses the same type of denoising strength schedule format found in Deforum. This allows you to vary the strength of the denoising process over time. You can set the denoising strength schedule using the `--strength` argument.
+The hybrid video script uses the same type of schedule format found in Deforum. This allows you to vary the strength and guidance scale of the denoising process over time. You can set the denoising strength schedule using the `--strength` argument.
 
 For example the following command will set the denoising strength to 0.75 at frame 0 and then drop it down to 0.5 from frame 1 onwards.
 
@@ -60,6 +60,34 @@ For example the following command will set the denoising strength to 0.75 at fra
 python hybrid_video.py --video_path <path_to_video> \
 --prompt "<your prompt>" \
 --strength "0:(0.75), 1:(0.75)"
+```
+
+This following command sets the strength to 0.75 throughout the generation process.
+
+```shell
+python hybrid_video.py --video_path <path_to_video> \
+--prompt "<your prompt>" \
+--strength "0:(0.75)"
+```
+
+### Setting the Seed
+
+You can set the seed for the random number generator using the `--seed` argument.
+
+```shell
+python hybrid_video.py --video_path <path_to_video> \
+--prompt "<your prompt>" \
+--seed 12345
+```
+
+### Setting the Guidance Scale
+
+You can set the guidance scale using the `--guidance_scale` argument.
+
+```shell
+python hybrid_video.py --video_path <path_to_video> \
+--prompt "<your prompt>" \
+--guidance_scale 9.0
 ```
 
 ### Using LoRAs

@@ -1,8 +1,10 @@
 diffusers
 accelerate
 transformers
+peft
 torch
 torchvision
 kornia
 keyframed
 scikit-image
+opencv-python

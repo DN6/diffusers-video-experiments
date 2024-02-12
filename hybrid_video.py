@@ -29,6 +29,8 @@ parser.add_argument("--width", type=int, default=1024)
 parser.add_argument("--prompt", type=str)
 parser.add_argument("--num_inference_steps", type=int, default=12)
 parser.add_argument("--strength", type=str, default="0:(0.5)")
+parser.add_argument("--guidance_scale", type=float, default=7.5)
+parser.add_argument("--seed", type=int, default=42)
 parser.add_argument(
     "--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0"
 )
@@ -134,10 +136,12 @@ def run(
     prompt: str = None,
     num_frames: int = 32,
     fps: int = 10,
-    num_inference_steps: int = 8,
+    num_inference_steps: int = 12,
     height: int = 1024,
     width: int = 1024,
     strength: str = "0:(0.6)",
+    guidance_scale: float = 7.5,
+    seed: int = 42,
     model_id: str = None,
     lora_id: str = None,
     lora_scale: float = 1.0,
@@ -154,45 +158,59 @@ def run(
     pipe.set_progress_bar_config(disable=True)
     pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
     pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl", adapter_name="lcm")
+
     if lora_id:
         pipe.load_lora_weights(lora_id, adapter_name="style")
         pipe.set_adapters(["lcm", "style"], adapter_weights=[1.0, lora_scale])
+    else:
+        pipe.set_adapters(["lcm"], adapter_weights=[1.0])
 
     pipe.enable_model_cpu_offload()
 
     optical_flow_maps = get_optical_flow(tensor_frames)
-    generator = torch.Generator("cpu").manual_seed(42)
+    generator = torch.Generator("cpu").manual_seed(seed)
 
     init_image = load_image(args.init_image) if init_image else video_frames[0]
+    strength = curve_from_cn_string(strength)
 
+    pbar = tqdm(total=len(optical_flow_maps) + 1, disable=False)
+
+    # Generate initial frame
     output = pipe(
         image=init_image,
         prompt=prompt,
         generator=generator,
+        strength=strength[0],
+        guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
     ).images[0]
-    output_images = [output]
     init_image = output
+    output_images = [output]
 
-    strength = curve_from_cn_string(strength)
+    pbar.update()
 
-    pbar = tqdm(total=len(optical_flow_maps), disable=False)
-    for frame_idx, flow_map in pbar:
-        pbar.set_description(f"Processing {frame_idx}")
+    if save:
+        os.makedirs("generated", exist_ok=True)
+        output.save("generated/0000.png")
+
+    for flow_idx, flow_map in enumerate(optical_flow_maps):
         frame = apply_flow_warping(output, flow_map)
+        frame_idx = flow_idx + 1
+
         output = pipe(
             image=frame,
             prompt=prompt,
             generator=generator,
             strength=strength[frame_idx],
+            guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps,
         ).images[0]
 
         output = apply_lab_color_matching(output, init_image)
         output_images.append(output)
         if save:
-            os.makedirs("generated", exist_ok=True)
             output.save(f"generated/{frame_idx:04d}.png")
+        pbar.update()
 
     export_to_video(output_images, "output.mp4", fps=fps)
 
@@ -204,13 +222,16 @@ if __name__ == "__main__":
     run(
         args.save,
         args.video_path,
-        args.prompt,
         args.init_image,
+        args.prompt,
         args.num_frames,
+        args.fps,
         args.num_inference_steps,
         args.height,
         args.width,
         args.strength,
+        args.guidance_scale,
+        args.seed,
         args.model_id,
         args.lora_id,
         args.lora_scale,
