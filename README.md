@@ -10,9 +10,9 @@ This is a simple implementation of [Deforum](https://deforum.github.io/)'s hybri
 pip install -r requirements.txt
 ```
 
-### Run Script
+### Run Inference Script
 
-The hybrid video script uses an SDXL model with LCM-LoRA for fast inference. It requires a source video and a text prompt.
+The hybrid video script uses an [SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) with the option of using [LCM-LoRA](https://huggingface.co/latent-consistency/lcm-lora-sdxl) for fast inference. It requires a source video and a text prompt.
 
 Run the script with the default settings using the following command:
 
@@ -105,6 +105,17 @@ python hybrid_video.py --video_path <path_to_video> \
 --lora_scale 1.0
 ```
 
+### Speeding up inference with LCM-LoRA
+
+You can speed up inference by using LCM-LoRA and reducing the number of inference steps. Simply pass in the `--use_lcm` argument. When using LCM-LoRA, make sure to reduce your guidance scale to be between 1.0-2.0
+
+```shell
+python hybrid_video.py --video_path <path_to_video> \
+--prompt "<your prompt>" \
+--use_lcm
+--gudiance_scale 1.5
+```
+
 ### Saving intermediate results
 
 You can save the intermediate framss from the generation process using the the `--save` argument
@@ -117,3 +128,13 @@ python hybrid_video.py --video_path <path_to_video> \
 --save
 ```
 
+### Using ControlNets.
+
+The `hybrid_video_controlnet.py` uses the exact same arguments as `hybrid_video.py` with two addtional parameters, `--canny_scale` and `--depth_scale` that set the conditioning scales for a Canny and Depth ControlNet model.
+
+```shell
+python hybrid_video_controlnet.py --video_path <path_to_video> \
+--prompt "<your prompt>" \
+--canny_scale 0.5 \
+--dpeth_scale 0.1
+```

@@ -10,7 +10,8 @@ from diffusers import (
     AutoencoderKL,
     EulerDiscreteScheduler,
     LCMScheduler,
-    StableDiffusionXLImg2ImgPipeline,
+    ControlNetModel,
+    StableDiffusionXLControlNetImg2ImgPipeline,
 )
 from diffusers.utils import export_to_video, load_image
 from keyframed.dsl import curve_from_cn_string
@@ -21,6 +22,9 @@ from skimage.exposure import match_histograms
 from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
+from controlnet_aux import MidasDetector, CannyDetector
+
+CONTROLNET_MODELS = ["diffusers/controlnet-canny-sdxl-1.0", "diffusers/controlnet-depth-sdxl-1.0"]
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,6 +39,8 @@ parser.add_argument("--prompt", type=str)
 parser.add_argument("--num_inference_steps", type=int, default=12)
 parser.add_argument("--strength", type=str, default="0:(0.5)")
 parser.add_argument("--guidance_scale", type=float, default=7.5)
+parser.add_argument("--canny_scale", type=float, default=0.1)
+parser.add_argument("--depth_scale", type=float, default=0.1)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument(
     "--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0"
@@ -90,6 +96,24 @@ def preprocess(batch):
     return batch
 
 
+def get_control_images(frames):
+    canny = CannyDetector()
+    midas = MidasDetector.from_pretrained("lllyasviel/Annotators")
+    midas.to(device)
+
+    outputs = []
+    for frame in frames:
+        processed_image_midas = midas(frame, detect_resolution=1024, image_resolution=1024)
+        processed_image_canny = canny(frame, detect_resolution=1024, image_resolution=1024)
+        outputs.append([processed_image_canny, processed_image_midas])
+
+    midas.to("cpu")
+    del midas
+    torch.cuda.empty_cache()
+
+    return outputs
+
+
 def get_optical_flow(frames):
     model = raft_large(pretrained=True, progress=False)
     model = model.to(device, torch.float32)
@@ -135,6 +159,10 @@ def apply_flow_warping(image, flow_map):
     return output_image
 
 
+def load_controlnet(controlnet_model):
+    return ControlNetModel.from_pretrained(controlnet_model, torch_dtype=torch.float16)
+
+
 def run(
     save,
     use_lcm,
@@ -152,15 +180,20 @@ def run(
     model_id: str = None,
     lora_id: str = None,
     lora_scale: float = 1.0,
+    canny_scale: float = 0.0,
+    depth_scale: float = 0.0,
 ):
     video_frames = load_video(video_path, height=height, width=width)
+    control_images = get_control_images([frame for frame in video_frames[:num_frames]])
     tensor_frames = [preprocess(frame)[None, :] for frame in video_frames[:num_frames]]
 
     vae = AutoencoderKL.from_pretrained(
         "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
     )
-    pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        model_id, torch_dtype=torch.float16, vae=vae, safety_checker=None
+    controlnets = [load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS]
+
+    pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
+        model_id, controlnet=controlnets, vae=vae, torch_dtype=torch.float16, safety_checker=None
     )
     pipe.set_progress_bar_config(disable=True)
     if use_lcm:
@@ -189,11 +222,13 @@ def run(
     # Generate initial frame
     output = pipe(
         image=init_image,
+        control_image=control_images[0],
         prompt=prompt,
         generator=generator,
         strength=strength[0],
         guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
+        controlnet_conditioning_scale=[canny_scale],
     ).images[0]
     init_image = output
     output_images = [output]
@@ -211,6 +246,8 @@ def run(
         output = pipe(
             image=frame,
             prompt=prompt,
+            control_image=control_images[frame_idx],
+            controlnet_conditioning_scale=[canny_scale, depth_scale],
             generator=generator,
             strength=strength[frame_idx],
             guidance_scale=guidance_scale,
@@ -247,4 +284,6 @@ if __name__ == "__main__":
         args.model_id,
         args.lora_id,
         args.lora_scale,
+        args.canny_scale,
+        args.depth_scale,
     )
