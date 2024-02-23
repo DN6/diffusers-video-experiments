@@ -23,6 +23,7 @@ from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
 from controlnet_aux import MidasDetector, CannyDetector
+from datetime import datetime
 
 CONTROLNET_MODELS = [
     "diffusers/controlnet-canny-sdxl-1.0",
@@ -152,7 +153,7 @@ def apply_flow_warping(image, flow_map):
     _, height, width = image_tensor.shape
 
     meshgrid = kornia.create_meshgrid(height, width, normalized_coordinates=False)
-    grid = meshgrid + flow_map
+    grid = meshgrid - flow_map
     grid = grid.permute(0, 3, 1, 2)
 
     output = remap(
@@ -249,9 +250,12 @@ def run(
 
     pbar.update()
 
+    run_id = datetime.now().strftime('%Y-%m-%d-%H:%M')
+    save_path = f"generated/{run_id}"
+    os.makedirs(save_path, exist_ok=True)
+
     if save:
-        os.makedirs("generated", exist_ok=True)
-        output.save("generated/0000.png")
+        output.save(f"{save_path}/0000.png")
 
     for flow_idx, flow_map in enumerate(optical_flow_maps):
         frame = apply_flow_warping(output, flow_map)
@@ -271,10 +275,10 @@ def run(
         output = apply_lab_color_matching(output, init_image)
         output_images.append(output)
         if save:
-            output.save(f"generated/{frame_idx:04d}.png")
+            output.save(f"{save_path}/{frame_idx:04d}.png")
         pbar.update()
 
-    export_to_video(output_images, "output.mp4", fps=fps)
+    export_to_video(output_images, f"{save_path}/output.mp4", fps=fps)
 
     return
 
