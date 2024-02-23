@@ -2,6 +2,8 @@
 
 This repo is a collection of scripts to experiment with generating videos using [Diffusers](https://github.com/huggingface/diffusers/tree/main)
 
+Currently it only has scripts for hybrid video generation, but more scripts will be added in the future.
+
 ## Hybrid Video
 
 This is a simple implementation of [Deforum](https://deforum.github.io/)'s hybrid video feature.
