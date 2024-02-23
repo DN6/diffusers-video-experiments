@@ -24,7 +24,10 @@ from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
 from controlnet_aux import MidasDetector, CannyDetector
 
-CONTROLNET_MODELS = ["diffusers/controlnet-canny-sdxl-1.0", "diffusers/controlnet-depth-sdxl-1.0"]
+CONTROLNET_MODELS = [
+    "diffusers/controlnet-canny-sdxl-1.0",
+    "diffusers/controlnet-depth-sdxl-1.0",
+]
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -103,8 +106,12 @@ def get_control_images(frames):
 
     outputs = []
     for frame in frames:
-        processed_image_midas = midas(frame, detect_resolution=1024, image_resolution=1024)
-        processed_image_canny = canny(frame, detect_resolution=1024, image_resolution=1024)
+        processed_image_midas = midas(
+            frame, detect_resolution=1024, image_resolution=1024
+        )
+        processed_image_canny = canny(
+            frame, detect_resolution=1024, image_resolution=1024
+        )
         outputs.append([processed_image_canny, processed_image_midas])
 
     midas.to("cpu")
@@ -190,10 +197,17 @@ def run(
     vae = AutoencoderKL.from_pretrained(
         "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
     )
-    controlnets = [load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS]
+    controlnets = [
+        load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS
+    ]
 
     pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
-        model_id, controlnet=controlnets, vae=vae, torch_dtype=torch.float16, safety_checker=None
+        model_id,
+        controlnet=controlnets,
+        vae=vae,
+        torch_dtype=torch.float16,
+        variant="fp16",
+        safety_checker=None,
     )
     pipe.set_progress_bar_config(disable=True)
     if use_lcm:

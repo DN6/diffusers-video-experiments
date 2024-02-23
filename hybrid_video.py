@@ -160,7 +160,11 @@ def run(
         "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
     )
     pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        model_id, torch_dtype=torch.float16, vae=vae, safety_checker=None
+        model_id,
+        torch_dtype=torch.float16,
+        vae=vae,
+        variant="fp16",
+        safety_checker=None,
     )
     pipe.set_progress_bar_config(disable=True)
     if use_lcm:
