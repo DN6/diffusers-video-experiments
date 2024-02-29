@@ -1,18 +1,16 @@
 import argparse
 import os
+from datetime import datetime
 
 import cv2
 import kornia
 import numpy as np
 import torch
 import torchvision.transforms as T
-from diffusers import (
-    AutoencoderKL,
-    EulerDiscreteScheduler,
-    LCMScheduler,
-    ControlNetModel,
-    StableDiffusionXLControlNetImg2ImgPipeline,
-)
+from controlnet_aux import CannyDetector, MidasDetector
+from diffusers import (AutoencoderKL, ControlNetModel, EulerDiscreteScheduler,
+                       LCMScheduler,
+                       StableDiffusionXLControlNetImg2ImgPipeline)
 from diffusers.utils import export_to_video, load_image
 from keyframed.dsl import curve_from_cn_string
 from kornia.color import lab_to_rgb, rgb_to_lab
@@ -22,8 +20,6 @@ from skimage.exposure import match_histograms
 from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
-from controlnet_aux import MidasDetector, CannyDetector
-from datetime import datetime
 
 CONTROLNET_MODELS = [
     "diffusers/controlnet-canny-sdxl-1.0",
@@ -229,7 +225,7 @@ def run(
     optical_flow_maps = get_optical_flow(tensor_frames)
     generator = torch.Generator("cpu").manual_seed(seed)
 
-    init_image = load_image(args.init_image) if init_image else video_frames[0]
+    init_image = load_image(args.init_image).resize((height, width)) if init_image else video_frames[0]
     strength = curve_from_cn_string(strength)
 
     pbar = tqdm(total=len(optical_flow_maps) + 1, disable=False)

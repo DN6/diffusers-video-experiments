@@ -1,5 +1,6 @@
 import argparse
 import os
+from datetime import datetime
 
 import cv2
 import kornia
@@ -21,7 +22,6 @@ from skimage.exposure import match_histograms
 from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
-from datetime import datetime
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -186,7 +186,7 @@ def run(
     optical_flow_maps = get_optical_flow(tensor_frames)
     generator = torch.Generator("cpu").manual_seed(seed)
 
-    init_image = load_image(args.init_image) if init_image else video_frames[0]
+    init_image = load_image(args.init_image).resize((height, width)) if init_image else video_frames[0]
     strength = curve_from_cn_string(strength)
 
     pbar = tqdm(total=len(optical_flow_maps) + 1, disable=False)
