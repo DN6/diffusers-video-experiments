@@ -111,16 +111,6 @@ python hybrid_video.py --video_path <path_to_video> \
 --lora_scale 1.0
 ```
 
-#### Speeding up inference with LCM-LoRA
-
-You can speed up inference by using LCM-LoRA and reducing the number of inference steps. Simply pass in the `--use_lcm` argument. When using LCM-LoRA, make sure to reduce your guidance scale to be between 1.0-2.0
-
-```shell
-python hybrid_video.py --video_path <path_to_video> \
---prompt "<your prompt>" \
---use_lcm
---gudiance_scale 1.5
-```
 
 #### Saving intermediate results
 

@@ -51,7 +51,6 @@ parser.add_argument("--model_id", type=str, default="stabilityai/stable-diffusio
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
-parser.add_argument("--use_lcm", action="store_true")
 
 canny = CannyDetector()
 depth_detect = ZoeDetector.from_pretrained("lllyasviel/Annotators")
