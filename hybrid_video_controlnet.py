@@ -1,30 +1,34 @@
 import argparse
+import json
 import os
 from datetime import datetime
 
-import cv2
 import kornia
-import numpy as np
 import torch
-import torchvision.transforms as T
-from controlnet_aux import CannyDetector, MidasDetector
-from diffusers import (AutoencoderKL, ControlNetModel, EulerDiscreteScheduler,
-                       LCMScheduler,
-                       StableDiffusionXLControlNetImg2ImgPipeline)
-from diffusers.utils import export_to_video, load_image
+from controlnet_aux import CannyDetector, ZoeDetector
+from diffusers import (
+    AutoencoderKL,
+    ControlNetModel,
+    DPMSolverSinglestepScheduler,
+    StableDiffusionXLControlNetImg2ImgPipeline,
+)
+from diffusers.utils import load_image, load_video, export_to_video
 from keyframed.dsl import curve_from_cn_string
-from kornia.color import lab_to_rgb, rgb_to_lab
 from kornia.geometry.transform import remap
-from PIL import Image
-from skimage.exposure import match_histograms
-from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
 
+from processors import OpticalFlowProcessor
+from utils import apply_lab_color_matching
+from wonderwords import RandomWord
+
+GEN_OUTPUT_PATH = os.getenv("GEN_OUTPUT_PATH", "generated_hybrid_videos")
 CONTROLNET_MODELS = [
-    "diffusers/controlnet-canny-sdxl-1.0",
-    "diffusers/controlnet-depth-sdxl-1.0",
+    "xinsir/controlnet-canny-sdxl-1.0",
+    "xinsir/controlnet-depth-sdxl-1.0",
 ]
+
+negative_prompt = "worst quality, low quality"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -32,6 +36,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--video_path", type=str)
 parser.add_argument("--init_image", type=str)
 parser.add_argument("--num_frames", type=int, default=32)
+parser.add_argument("--cadence", type=int, default=1)
 parser.add_argument("--fps", type=int, default=10)
 parser.add_argument("--height", type=int, default=1024)
 parser.add_argument("--width", type=int, default=1024)
@@ -42,104 +47,32 @@ parser.add_argument("--guidance_scale", type=float, default=7.5)
 parser.add_argument("--canny_scale", type=float, default=0.1)
 parser.add_argument("--depth_scale", type=float, default=0.1)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument(
-    "--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0"
-)
+parser.add_argument("--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0")
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
 parser.add_argument("--use_lcm", action="store_true")
 
-
-def load_video(path, height=1024, width=1024):
-    cap = cv2.VideoCapture(path)
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(Image.fromarray(frame).resize((height, width)))
-
-    cap.release()
-    return frames
-
-
-def apply_lab_color_matching(image, reference_image):
-    image = ToTensor()(image).unsqueeze(0)
-    reference_image = ToTensor()(reference_image).unsqueeze(0)
-
-    image = rgb_to_lab(image)
-    reference_image = rgb_to_lab(reference_image)
-
-    output = match_histograms(
-        np.array(image[0].permute(1, 2, 0)),
-        np.array(reference_image[0].permute(1, 2, 0)),
-        channel_axis=-1,
-    )
-
-    output = ToTensor()(output).unsqueeze(0)
-    output = lab_to_rgb(output)
-    output = ToPILImage()(output[0])
-
-    return output
-
-
-def preprocess(batch):
-    transforms = T.Compose(
-        [
-            T.ToTensor(),
-            T.ConvertImageDtype(torch.float32),
-            T.Normalize(mean=0.5, std=0.5),  # map [0, 1] into [-1, 1]
-        ]
-    )
-    batch = transforms(batch)
-    return batch
+canny = CannyDetector()
+depth_detect = ZoeDetector.from_pretrained("lllyasviel/Annotators")
+depth_detect.to(device)
 
 
 def get_control_images(frames):
-    canny = CannyDetector()
-    midas = MidasDetector.from_pretrained("lllyasviel/Annotators")
-    midas.to(device)
-
     outputs = []
     for frame in frames:
-        processed_image_midas = midas(
-            frame, detect_resolution=1024, image_resolution=1024
-        )
-        processed_image_canny = canny(
-            frame, detect_resolution=1024, image_resolution=1024
-        )
+        processed_image_midas = depth_detect(frame, detect_resolution=1024, image_resolution=1024)
+        processed_image_canny = canny(frame, detect_resolution=1024, image_resolution=1024)
         outputs.append([processed_image_canny, processed_image_midas])
-
-    midas.to("cpu")
-    del midas
-    torch.cuda.empty_cache()
 
     return outputs
 
 
-def get_optical_flow(frames):
-    model = raft_large(pretrained=True, progress=False)
-    model = model.to(device, torch.float32)
-    model = model.eval()
+def apply_loopback_controlnet(frame):
+    processed_image_canny = canny(frame, detect_resolution=1024, image_resolution=1024)
+    processed_image_midas = depth_detect(frame, detect_resolution=1024, image_resolution=1024)
 
-    flow_maps = []
-    for frame_1, frame_2 in zip(frames, frames[1:]):
-        frame_1 = frame_1.to(device)
-        frame_2 = frame_2.to(device)
-
-        with torch.no_grad():
-            flow_map = model(frame_1, frame_2)
-            flow_maps.append(flow_map[-1].to("cpu"))
-
-        frame_1 = frame_1.to("cpu")
-        frame_2 = frame_2.to("cpu")
-
-    model.to("cpu")
-    del model
-    torch.cuda.empty_cache()
-
-    return flow_maps
+    return [processed_image_canny, processed_image_midas]
 
 
 def apply_flow_warping(image, flow_map):
@@ -149,7 +82,7 @@ def apply_flow_warping(image, flow_map):
     _, height, width = image_tensor.shape
 
     meshgrid = kornia.create_meshgrid(height, width, normalized_coordinates=False)
-    grid = meshgrid - flow_map
+    grid = meshgrid - (flow_map * 1.0)
     grid = grid.permute(0, 3, 1, 2)
 
     output = remap(
@@ -158,6 +91,7 @@ def apply_flow_warping(image, flow_map):
         grid[:, 1],
         mode="bilinear",
         normalized_coordinates=False,
+        padding_mode="border",
     )
     output_image = ToPILImage()(output[0])
     return output_image
@@ -169,11 +103,12 @@ def load_controlnet(controlnet_model):
 
 def run(
     save,
-    use_lcm,
+    save_path,
     video_path: str,
     init_image: str = None,
     prompt: str = None,
     num_frames: int = 32,
+    cadence: int = 1,
     fps: int = 10,
     num_inference_steps: int = 16,
     height: int = 1024,
@@ -188,41 +123,30 @@ def run(
     depth_scale: float = 0.0,
 ):
     video_frames = load_video(video_path, height=height, width=width)
-    control_images = get_control_images([frame for frame in video_frames[:num_frames]])
-    tensor_frames = [preprocess(frame)[None, :] for frame in video_frames[:num_frames]]
-
-    vae = AutoencoderKL.from_pretrained(
-        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
-    )
-    controlnets = [
-        load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS
+    video_frames = [
+        video_frames[frame_idx] for frame_idx in range(0, min(len(video_frames), num_frames * cadence), cadence)
     ]
+    optical_flow_maps = OpticalFlowProcessor()(video_frames, device)
+
+    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+    controlnets = [load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS]
 
     pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
         model_id,
         controlnet=controlnets,
         vae=vae,
         torch_dtype=torch.float16,
-        variant="fp16",
         safety_checker=None,
     )
-    pipe.set_progress_bar_config(disable=True)
-    if use_lcm:
-        pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl", adapter_name="lcm")
-        pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
-    else:
-        pipe.scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
+    pipe.scheduler = DPMSolverSinglestepScheduler.from_config(pipe.scheduler.config)
 
     if lora_id:
         pipe.load_lora_weights(lora_id, adapter_name="style")
-        if use_lcm:
-            pipe.set_adapters(["lcm", "style"], [1.0, lora_scale])
-        else:
-            pipe.set_adapters(["style"], [lora_scale])
+        pipe.set_adapters(["style"], [lora_scale])
 
-    pipe.enable_model_cpu_offload()
+    pipe.set_progress_bar_config(disable=True)
 
-    optical_flow_maps = get_optical_flow(tensor_frames)
+    control_images = get_control_images(video_frames)
     generator = torch.Generator("cpu").manual_seed(seed)
 
     init_image = load_image(args.init_image).resize((height, width)) if init_image else video_frames[0]
@@ -230,28 +154,40 @@ def run(
 
     pbar = tqdm(total=len(optical_flow_maps) + 1, disable=False)
 
+    pipe.to("cuda")
     # Generate initial frame
     output = pipe(
         image=init_image,
         control_image=control_images[0],
         prompt=prompt,
+        negative_prompt=negative_prompt,
         generator=generator,
         strength=strength[0],
         guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
-        controlnet_conditioning_scale=[canny_scale],
+        controlnet_conditioning_scale=[canny_scale, depth_scale],
     ).images[0]
-    init_image = output
-    output_images = [output]
 
     pbar.update()
+    pipe.to("cpu")
 
-    run_id = datetime.now().strftime('%Y-%m-%d-%H:%M')
-    save_path = f"generated/{run_id}"
-    os.makedirs(save_path, exist_ok=True)
+    init_image = output
+    ip_adapter_image = init_image
+    output_images = [output]
 
     if save:
         output.save(f"{save_path}/0000.png")
+    output.save(f"{save_path}/preview.png")
+
+    pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
+    scale = {
+        "down": {"block_2": [0.0, 1.0]},
+        "up": {"block_0": [0.0, 1.0, 0.0]},
+    }
+    pipe.to("cuda")
+    pipe.set_ip_adapter_scale(scale)
+
+    control_image = apply_loopback_controlnet(output)
 
     for flow_idx, flow_map in enumerate(optical_flow_maps):
         frame = apply_flow_warping(output, flow_map)
@@ -260,44 +196,44 @@ def run(
         output = pipe(
             image=frame,
             prompt=prompt,
-            control_image=control_images[frame_idx],
+            negative_prompt=negative_prompt,
+            control_image=control_image,
             controlnet_conditioning_scale=[canny_scale, depth_scale],
-            generator=generator,
             strength=strength[frame_idx],
             guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps,
+            ip_adapter_image=[ip_adapter_image],
         ).images[0]
 
         output = apply_lab_color_matching(output, init_image)
+        ip_adapter_image = output
+        control_image = apply_loopback_controlnet(output)
+
         output_images.append(output)
         if save:
             output.save(f"{save_path}/{frame_idx:04d}.png")
+        output.save(f"{save_path}/preview.png")
+
         pbar.update()
 
     export_to_video(output_images, f"{save_path}/output.mp4", fps=fps)
 
-    return
-
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    run(
-        args.save,
-        args.use_lcm,
-        args.video_path,
-        args.init_image,
-        args.prompt,
-        args.num_frames,
-        args.fps,
-        args.num_inference_steps,
-        args.height,
-        args.width,
-        args.strength,
-        args.guidance_scale,
-        args.seed,
-        args.model_id,
-        args.lora_id,
-        args.lora_scale,
-        args.canny_scale,
-        args.depth_scale,
+    config = vars(args)
+
+    wordgen = RandomWord()
+    run_name = (
+        f"{wordgen.word(include_parts_of_speech=['adjectives'])}-{wordgen.word(include_parts_of_speech=['nouns'])}"
     )
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H:%M")
+    run_id = f"hv-controlnet-{timestamp}-{run_name}"
+    save_path = f"{GEN_OUTPUT_PATH}/{run_id}"
+    os.makedirs(save_path, exist_ok=True)
+
+    with open(f"{save_path}/config.json", "w") as fp:
+        json.dump(config, fp, indent=4)
+
+    config.update({"save_path": save_path})
+    run(**config)

@@ -8,4 +8,4 @@ kornia
 keyframed
 scikit-image
 opencv-python
-controlnet-aux==0.0.7
+controlnet-aux

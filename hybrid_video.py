@@ -23,6 +23,13 @@ from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
 
+import json
+from utils import apply_lab_color_matching, export_to_video, load_video
+from wonderwords import RandomWord
+from transformers import CLIPVisionModelWithProjection
+
+GEN_OUTPUT_PATH = os.getenv("GEN_OUTPUT_PATH", "generated_hybrid_videos")
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser()
@@ -33,13 +40,12 @@ parser.add_argument("--fps", type=int, default=10)
 parser.add_argument("--height", type=int, default=1024)
 parser.add_argument("--width", type=int, default=1024)
 parser.add_argument("--prompt", type=str)
-parser.add_argument("--num_inference_steps", type=int, default=12)
+parser.add_argument("--num_inference_steps", type=int, default=24)
+parser.add_argument("--cadence", type=int, default=1)
 parser.add_argument("--strength", type=str, default="0:(0.5)")
 parser.add_argument("--guidance_scale", type=float, default=7.5)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument(
-    "--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0"
-)
+parser.add_argument("--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0")
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
@@ -131,6 +137,7 @@ def apply_flow_warping(image, flow_map):
         grid[:, 1],
         mode="bilinear",
         normalized_coordinates=False,
+        padding_mode="border",
     )
     output_image = ToPILImage()(output[0])
     return output_image
@@ -138,6 +145,7 @@ def apply_flow_warping(image, flow_map):
 
 def run(
     save,
+    save_path,
     use_lcm,
     video_path: str,
     init_image: str = None,
@@ -145,6 +153,7 @@ def run(
     num_frames: int = 32,
     fps: int = 10,
     num_inference_steps: int = 16,
+    cadence: int = 1,
     height: int = 1024,
     width: int = 1024,
     strength: str = "0:(0.6)",
@@ -155,16 +164,16 @@ def run(
     lora_scale: float = 1.0,
 ):
     video_frames = load_video(video_path, height=height, width=width)
+    video_frames = [
+        video_frames[frame_idx] for frame_idx in range(0, min(len(video_frames), num_frames * cadence), cadence)
+    ]
     tensor_frames = [preprocess(frame)[None, :] for frame in video_frames[:num_frames]]
 
-    vae = AutoencoderKL.from_pretrained(
-        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
-    )
+    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
     pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
         vae=vae,
-        variant="fp16",
         safety_checker=None,
     )
     pipe.set_progress_bar_config(disable=True)
@@ -205,12 +214,17 @@ def run(
 
     pbar.update()
 
-    run_id = datetime.now().strftime('%Y-%m-%d-%H:%M')
-    save_path = f"generated/{run_id}"
-    os.makedirs(save_path, exist_ok=True)
-
     if save:
         output.save(f"{save_path}/0000.png")
+
+    pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
+    scale = {
+        "down": {"block_2": [0.0, 1.0]},
+        "up": {"block_0": [0.0, 1.0, 0.0]},
+    }
+    pipe.set_ip_adapter_scale(scale)
+    pipe.to("cuda")
+    ip_adapter_image = output
 
     for flow_idx, flow_map in enumerate(optical_flow_maps):
         frame = apply_flow_warping(output, flow_map)
@@ -222,9 +236,11 @@ def run(
             generator=generator,
             strength=strength[frame_idx],
             guidance_scale=guidance_scale,
+            ip_adapter_image=ip_adapter_image,
             num_inference_steps=num_inference_steps,
         ).images[0]
 
+        ip_adapter_image = output
         output = apply_lab_color_matching(output, init_image)
         output_images.append(output)
         if save:
@@ -238,21 +254,19 @@ def run(
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    run(
-        args.save,
-        args.use_lcm,
-        args.video_path,
-        args.init_image,
-        args.prompt,
-        args.num_frames,
-        args.fps,
-        args.num_inference_steps,
-        args.height,
-        args.width,
-        args.strength,
-        args.guidance_scale,
-        args.seed,
-        args.model_id,
-        args.lora_id,
-        args.lora_scale,
+    config = vars(args)
+
+    wordgen = RandomWord()
+    run_name = (
+        f"{wordgen.word(include_parts_of_speech=['adjectives'])}-{wordgen.word(include_parts_of_speech=['nouns'])}"
     )
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H:%M")
+    run_id = f"hv-{timestamp}-{run_name}"
+    save_path = f"{GEN_OUTPUT_PATH}/{run_id}"
+    os.makedirs(save_path, exist_ok=True)
+
+    with open(f"{save_path}/config.json", "w") as fp:
+        json.dump(config, fp, indent=4)
+
+    config.update({"save_path": save_path})
+    run(**config)
