@@ -2,7 +2,6 @@ import os
 import tempfile
 
 import cv2
-import ffmpeg
 import numpy as np
 import PIL
 from kornia.color import lab_to_rgb, rgb_to_lab

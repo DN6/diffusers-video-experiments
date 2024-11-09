@@ -39,9 +39,7 @@ parser.add_argument("--cadence", type=int, default=1)
 parser.add_argument("--strength", type=str, default="0:(0.5)")
 parser.add_argument("--guidance_scale", type=float, default=7.5)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument(
-    "--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0"
-)
+parser.add_argument("--model_id", type=str, default="black-forest-labs/FLUX.1-dev")
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
