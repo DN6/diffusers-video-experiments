@@ -19,7 +19,7 @@ from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
 import PIL
 import json
-from utils import apply_lab_color_matching, export_to_video, load_video
+from utils import apply_lab_color_matching
 from wonderwords import RandomWord
 
 GEN_OUTPUT_PATH = os.getenv("GEN_OUTPUT_PATH", "generated_hybrid_videos")
