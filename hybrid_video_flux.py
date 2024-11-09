@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 from diffusers import FluxImg2ImgPipeline
-from diffusers.utils import export_to_video, load_image
+from diffusers.utils import load_video, export_to_video, load_image
 from keyframed.dsl import curve_from_cn_string
 from kornia.color import lab_to_rgb, rgb_to_lab
 from kornia.geometry.transform import remap
@@ -17,7 +17,7 @@ from skimage.exposure import match_histograms
 from torchvision.models.optical_flow import raft_large
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
-
+import PIL
 import json
 from utils import apply_lab_color_matching, export_to_video, load_video
 from wonderwords import RandomWord
@@ -45,19 +45,6 @@ parser.add_argument(
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
-
-
-def load_video(path, height=1024, width=1024):
-    cap = cv2.VideoCapture(path)
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(Image.fromarray(frame).resize((height, width)))
-
-    cap.release()
-    return frames
 
 
 def apply_lab_color_matching(image, reference_image):
@@ -157,7 +144,10 @@ def run(
     lora_id: str = None,
     lora_scale: float = 1.0,
 ):
-    video_frames = load_video(video_path, height=height, width=width)
+    video_frames = load_video(video_path)
+    video_frames = [
+        frame.resize((width, height), PIL.Image.LANCZOS) for frame in video_frames
+    ]
     video_frames = [
         video_frames[frame_idx]
         for frame_idx in range(0, min(len(video_frames), num_frames * cadence), cadence)
