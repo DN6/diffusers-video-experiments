@@ -2,7 +2,6 @@ import argparse
 import os
 from datetime import datetime
 
-import cv2
 import kornia
 import numpy as np
 import torch
@@ -21,6 +20,7 @@ import PIL
 import json
 from utils import apply_lab_color_matching
 from wonderwords import RandomWord
+from processors import OpticalFlowProcessor
 
 GEN_OUTPUT_PATH = os.getenv("GEN_OUTPUT_PATH", "generated_hybrid_videos")
 
@@ -43,62 +43,6 @@ parser.add_argument("--model_id", type=str, default="black-forest-labs/FLUX.1-de
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
-
-
-def apply_lab_color_matching(image, reference_image):
-    image = ToTensor()(image).unsqueeze(0)
-    reference_image = ToTensor()(reference_image).unsqueeze(0)
-
-    image = rgb_to_lab(image)
-    reference_image = rgb_to_lab(reference_image)
-
-    output = match_histograms(
-        np.array(image[0].permute(1, 2, 0)),
-        np.array(reference_image[0].permute(1, 2, 0)),
-        channel_axis=-1,
-    )
-
-    output = ToTensor()(output).unsqueeze(0)
-    output = lab_to_rgb(output)
-    output = ToPILImage()(output[0])
-
-    return output
-
-
-def preprocess(batch):
-    transforms = T.Compose(
-        [
-            T.ToTensor(),
-            T.ConvertImageDtype(torch.float32),
-            T.Normalize(mean=0.5, std=0.5),  # map [0, 1] into [-1, 1]
-        ]
-    )
-    batch = transforms(batch)
-    return batch
-
-
-def get_optical_flow(frames):
-    model = raft_large(pretrained=True, progress=False)
-    model = model.to(device, torch.float32)
-    model = model.eval()
-
-    flow_maps = []
-    for frame_1, frame_2 in zip(frames, frames[1:]):
-        frame_1 = frame_1.to(device)
-        frame_2 = frame_2.to(device)
-
-        with torch.no_grad():
-            flow_map = model(frame_1, frame_2)
-            flow_maps.append(flow_map[-1].to("cpu"))
-
-        frame_1 = frame_1.to("cpu")
-        frame_2 = frame_2.to("cpu")
-
-    model.to("cpu")
-    del model
-    torch.cuda.empty_cache()
-
-    return flow_maps
 
 
 def apply_flow_warping(image, flow_map):
@@ -150,7 +94,7 @@ def run(
         video_frames[frame_idx]
         for frame_idx in range(0, min(len(video_frames), num_frames * cadence), cadence)
     ]
-    tensor_frames = [preprocess(frame)[None, :] for frame in video_frames[:num_frames]]
+    optical_flow_maps = OpticalFlowProcessor()(video_frames, device)
 
     pipe = FluxImg2ImgPipeline.from_pretrained(
         model_id,
@@ -162,11 +106,10 @@ def run(
         pipe.load_lora_weights(lora_id, adapter_name="style")
     pipe.to("cuda")
 
-    optical_flow_maps = get_optical_flow(tensor_frames)
     generator = torch.Generator("cpu").manual_seed(seed)
 
     init_image = (
-        load_image(args.init_image).resize((height, width))
+        load_image(args.init_image).resize((width, height))
         if init_image
         else video_frames[0]
     )
