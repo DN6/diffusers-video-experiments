@@ -132,7 +132,7 @@ def run(
 ):
     video_frames = load_video(video_path, height=height, width=width)
     video_frames = [
-        frame.resize((width, height), PIL.Image.LANCZOS) for frame in video_frames)
+        frame.resize((width, height), PIL.Image.LANCZOS) for frame in video_frames
     ]
     video_frames = [
         video_frames[frame_idx]
