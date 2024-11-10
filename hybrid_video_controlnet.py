@@ -130,7 +130,7 @@ def run(
     canny_scale: float = 0.0,
     depth_scale: float = 0.0,
 ):
-    video_frames = load_video(video_path, height=height, width=width)
+    video_frames = load_video(video_path)
     video_frames = [
         frame.resize((width, height), PIL.Image.LANCZOS) for frame in video_frames
     ]
