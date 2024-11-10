@@ -17,6 +17,7 @@ from keyframed.dsl import curve_from_cn_string
 from kornia.geometry.transform import remap
 from torchvision.transforms import ToPILImage, ToTensor
 from tqdm import tqdm
+import PIL
 
 from processors import OpticalFlowProcessor
 from utils import apply_lab_color_matching
@@ -47,7 +48,9 @@ parser.add_argument("--guidance_scale", type=float, default=7.5)
 parser.add_argument("--canny_scale", type=float, default=0.1)
 parser.add_argument("--depth_scale", type=float, default=0.1)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0")
+parser.add_argument(
+    "--model_id", type=str, default="stabilityai/stable-diffusion-xl-base-1.0"
+)
 parser.add_argument("--lora_id", type=str)
 parser.add_argument("--lora_scale", type=float, default=1.0)
 parser.add_argument("--save", action="store_true")
@@ -60,8 +63,12 @@ depth_detect.to(device)
 def get_control_images(frames):
     outputs = []
     for frame in frames:
-        processed_image_midas = depth_detect(frame, detect_resolution=1024, image_resolution=1024)
-        processed_image_canny = canny(frame, detect_resolution=1024, image_resolution=1024)
+        processed_image_midas = depth_detect(
+            frame, detect_resolution=1024, image_resolution=1024
+        )
+        processed_image_canny = canny(
+            frame, detect_resolution=1024, image_resolution=1024
+        )
         outputs.append([processed_image_canny, processed_image_midas])
 
     return outputs
@@ -69,7 +76,9 @@ def get_control_images(frames):
 
 def apply_loopback_controlnet(frame):
     processed_image_canny = canny(frame, detect_resolution=1024, image_resolution=1024)
-    processed_image_midas = depth_detect(frame, detect_resolution=1024, image_resolution=1024)
+    processed_image_midas = depth_detect(
+        frame, detect_resolution=1024, image_resolution=1024
+    )
 
     return [processed_image_canny, processed_image_midas]
 
@@ -123,12 +132,20 @@ def run(
 ):
     video_frames = load_video(video_path, height=height, width=width)
     video_frames = [
-        video_frames[frame_idx] for frame_idx in range(0, min(len(video_frames), num_frames * cadence), cadence)
+        frame.resize((width, height), PIL.Image.LANCZOS) for frame in video_frames)
+    ]
+    video_frames = [
+        video_frames[frame_idx]
+        for frame_idx in range(0, min(len(video_frames), num_frames * cadence), cadence)
     ]
     optical_flow_maps = OpticalFlowProcessor()(video_frames, device)
 
-    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
-    controlnets = [load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS]
+    vae = AutoencoderKL.from_pretrained(
+        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    )
+    controlnets = [
+        load_controlnet(controlnet_model) for controlnet_model in CONTROLNET_MODELS
+    ]
 
     pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
         model_id,
@@ -148,7 +165,11 @@ def run(
     control_images = get_control_images(video_frames)
     generator = torch.Generator("cpu").manual_seed(seed)
 
-    init_image = load_image(args.init_image).resize((height, width)) if init_image else video_frames[0]
+    init_image = (
+        load_image(args.init_image).resize((height, width))
+        if init_image
+        else video_frames[0]
+    )
     strength = curve_from_cn_string(strength)
 
     pbar = tqdm(total=len(optical_flow_maps) + 1, disable=False)
@@ -178,7 +199,9 @@ def run(
         output.save(f"{save_path}/0000.png")
     output.save(f"{save_path}/preview.png")
 
-    pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
+    pipe.load_ip_adapter(
+        "h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin"
+    )
     scale = {
         "down": {"block_2": [0.0, 1.0]},
         "up": {"block_0": [0.0, 1.0, 0.0]},
@@ -223,9 +246,7 @@ if __name__ == "__main__":
     config = vars(args)
 
     wordgen = RandomWord()
-    run_name = (
-        f"{wordgen.word(include_parts_of_speech=['adjectives'])}-{wordgen.word(include_parts_of_speech=['nouns'])}"
-    )
+    run_name = f"{wordgen.word(include_parts_of_speech=['adjectives'])}-{wordgen.word(include_parts_of_speech=['nouns'])}"
     timestamp = datetime.now().strftime("%Y-%m-%d-%H:%M")
     run_id = f"hv-controlnet-{timestamp}-{run_name}"
     save_path = f"{GEN_OUTPUT_PATH}/{run_id}"
